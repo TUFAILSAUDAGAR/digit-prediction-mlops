@@ -1,13 +1,4 @@
-"""
-Training pipeline for the Digit Prediction model.
-
-Steps:
-  1. Load MNIST dataset
-  2. Generate synthetic metadata (pen_pressure, writer_age, handedness)
-  3. Train CNNEncoder + FinalClassifier
-  4. Save artifacts to models/<version>/
-  5. Register the new version in the model registry
-"""
+"""Training pipeline: MNIST + synthetic metadata → CNNEncoder + FinalClassifier."""
 
 import argparse
 import logging
@@ -76,32 +67,19 @@ class MNISTWithMeta(Dataset):
 # ── Training ──────────────────────────────────────────────────────────────────
 
 def train(version: str, epochs: int = 5, batch_size: int = 128, lr: float = 1e-3):
-    """
-    Full training pipeline.
-
-    1. Downloads MNIST to DATA_DIR (cached on subsequent runs).
-    2. Generates reproducible synthetic metadata (pen_pressure, writer_age, handedness).
-    3. Fits a ColumnTransformer on training metadata (StandardScaler + OneHotEncoder).
-    4. Trains CNNEncoder + FinalClassifier jointly with Adam + CrossEntropyLoss.
-    5. Evaluates on the MNIST test set and logs accuracy.
-    6. Saves model artifacts + metadata encoder to models/<version>/.
-    7. Registers the version in the file-based model registry.
-
-    Returns:
-        Test-set accuracy (float).
-    """
+    """Train, evaluate, save artifacts, and register the model version."""
     logger.info("Starting training for version '%s'", version)
 
-    # Standard MNIST transform: PIL image → float tensor in [0, 1]
+    # MNIST transform: PIL → float tensor [0,1]
     transform = transforms.Compose([transforms.ToTensor()])
     train_mnist = datasets.MNIST(DATA_DIR, train=True, download=True, transform=transform)
     test_mnist = datasets.MNIST(DATA_DIR, train=False, download=True, transform=transform)
 
-    # Generate synthetic writer metadata with fixed seeds for reproducibility
+    # Synthetic metadata with fixed seeds for reproducibility
     train_meta_raw = _generate_metadata(len(train_mnist), seed=0)
     test_meta_raw = _generate_metadata(len(test_mnist), seed=1)
 
-    # Fit encoder on training data only — transform both splits
+    # Fit encoder on train only, then transform both splits
     metadata_encoder = _build_metadata_encoder(train_meta_raw)
     train_meta = metadata_encoder.transform(train_meta_raw).astype("float32")
     test_meta = metadata_encoder.transform(test_meta_raw).astype("float32")
@@ -113,11 +91,11 @@ def train(version: str, epochs: int = 5, batch_size: int = 128, lr: float = 1e-3
         MNISTWithMeta(test_mnist, test_meta), batch_size=batch_size
     )
 
-    metadata_dim = train_meta.shape[1]  # determined by ColumnTransformer output
+    metadata_dim = train_meta.shape[1]  # output size of ColumnTransformer
     image_model = CNNEncoder()
     final_model = FinalClassifier(metadata_dim=metadata_dim)
 
-    # Jointly optimise both sub-networks with a single Adam optimiser
+    # Single Adam optimiser for both sub-networks
     optimizer = torch.optim.Adam(
         list(image_model.parameters()) + list(final_model.parameters()), lr=lr
     )
@@ -130,8 +108,8 @@ def train(version: str, epochs: int = 5, batch_size: int = 128, lr: float = 1e-3
         running_loss = 0.0
         for imgs, metas, labels in train_loader:
             optimizer.zero_grad()
-            img_feat = image_model(imgs)          # (B, 128) image features
-            logits = final_model(img_feat, metas) # (B, 10) digit logits
+            img_feat = image_model(imgs)          # (B, 128)
+            logits = final_model(img_feat, metas) # (B, 10)
             loss = criterion(logits, labels)
             loss.backward()
             optimizer.step()
@@ -153,7 +131,7 @@ def train(version: str, epochs: int = 5, batch_size: int = 128, lr: float = 1e-3
     accuracy = correct / total
     logger.info("Test accuracy: %.4f", accuracy)
 
-    # ── Persist artifacts ──────────────────────────────────────────────────────
+    # ── Save artifacts ─────────────────────────────────────────────────────────
     out_dir = MODELS_DIR / version
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,7 +140,7 @@ def train(version: str, epochs: int = 5, batch_size: int = 128, lr: float = 1e-3
     joblib.dump(metadata_encoder, out_dir / "metadata_encoder.joblib")
     logger.info("Artifacts saved to %s", out_dir)
 
-    # ── Register in model registry ─────────────────────────────────────────────
+    # ── Register version ───────────────────────────────────────────────────────
     registry = ModelRegistry(MODELS_DIR)
     registry.register(
         version=version,

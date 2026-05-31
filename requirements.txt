@@ -1,4 +1,4 @@
-# ── Core ML / inference ───────────────────────────────────────────────────────
+# ML / inference
 torch==2.11.0
 torchvision==0.26.0
 scikit-learn==1.8.0
@@ -8,13 +8,13 @@ numpy==2.4.4
 Pillow==12.2.0
 scipy==1.17.1
 
-# ── API server ────────────────────────────────────────────────────────────────
+# API server
 fastapi==0.136.0
 uvicorn==0.44.0
-python-multipart==0.0.26   # required by FastAPI for multipart/form-data (file uploads)
+python-multipart==0.0.26   # required for file upload support
 
-# ── HTTP client (drift trigger script) ───────────────────────────────────────
+# HTTP client
 requests==2.32.5
 
-# ── AWS / infrastructure (rollback script, optional in non-cloud envs) ────────
+# AWS (used by scripts/rollback.py)
 boto3>=1.34.0
