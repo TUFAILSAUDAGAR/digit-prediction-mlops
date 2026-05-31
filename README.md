@@ -95,9 +95,15 @@ docker run -p 8000:8000 digit-prediction-api
 
 ## CI/CD
 
-GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to `main`:
-1. **Lint** — ruff check and format
-2. **Test** — pytest
+Three GitHub Actions workflows are defined in `.github/workflows/`:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | Push / PR to `main` | Lint (ruff), test (pytest), Docker build |
+| `cd.yml` | Push to `main` / `workflow_dispatch` | Train (optional), build & push to ECR, deploy to ECS Fargate |
+| `retrain.yml` | Schedule (every 6h) / `workflow_dispatch` | Drift check, auto-retrain, evaluate, redeploy |
+
+Required GitHub secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `API_URL`, `RETRAIN_WEBHOOK_SECRET`.
 3. **Build** — Docker image build
 
 ## Model Versioning

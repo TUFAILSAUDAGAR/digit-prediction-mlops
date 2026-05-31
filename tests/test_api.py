@@ -15,7 +15,10 @@ def client():
 
 
 def _make_digit_image() -> bytes:
-    img = Image.fromarray(np.zeros((28, 28), dtype=np.uint8), mode="L")
+    # Use a non-blank image so it passes the blank-image validation check
+    arr = np.zeros((28, 28), dtype=np.uint8)
+    arr[8:20, 8:20] = 200  # draw a bright square to ensure std > 1e-3
+    img = Image.fromarray(arr, mode="L")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
