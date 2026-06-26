@@ -1,228 +1,228 @@
-name: Retrain
+# name: Retrain
 
-on:
-  # Run drift check every 6 hours
-  schedule:
-    - cron: "0 */6 * * *"
+# on:
+#   # Run drift check every 6 hours
+#   schedule:
+#     - cron: "0 */6 * * *"
 
-  # Manual trigger or called by retrain_trigger.py
-  workflow_dispatch:
-    inputs:
-      model_version:
-        description: "New model version tag (e.g. v2). Auto-incremented if empty."
-        required: false
-        default: ""
-      trigger_reason:
-        description: "Why was this retraining triggered?"
-        required: false
-        default: "manual"
+#   # Manual trigger or called by retrain_trigger.py
+#   workflow_dispatch:
+#     inputs:
+#       model_version:
+#         description: "New model version tag (e.g. v2). Auto-incremented if empty."
+#         required: false
+#         default: ""
+#       trigger_reason:
+#         description: "Why was this retraining triggered?"
+#         required: false
+#         default: "manual"
 
-env:
-  AWS_REGION: eu-west-1
-  ECR_REPOSITORY: digit-prediction-api
-  ECS_CLUSTER: digit-prediction-api
-  ECS_SERVICE: digit-prediction-api
-  CONTAINER_NAME: digit-prediction-api
+# env:
+#   AWS_REGION: eu-west-1
+#   ECR_REPOSITORY: digit-prediction-api
+#   ECS_CLUSTER: digit-prediction-api
+#   ECS_SERVICE: digit-prediction-api
+#   CONTAINER_NAME: digit-prediction-api
 
-jobs:
-  # ── 1. Check drift (scheduled runs only) ────────────────────────────────────
-  drift-check:
-    name: Check Prediction Drift
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    outputs:
-      should_retrain: ${{ steps.drift.outputs.should_retrain }}
-      new_version: ${{ steps.drift.outputs.new_version }}
-    steps:
-      - uses: actions/checkout@v4
+# jobs:
+#   # ── 1. Check drift (scheduled runs only) ────────────────────────────────────
+#   drift-check:
+#     name: Check Prediction Drift
+#     runs-on: ubuntu-latest
+#     if: github.event_name == 'schedule'
+#     outputs:
+#       should_retrain: ${{ steps.drift.outputs.should_retrain }}
+#       new_version: ${{ steps.drift.outputs.new_version }}
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+#       - name: Install dependencies
+#         run: pip install -r requirements.txt
 
-      - name: Run drift check
-        id: drift
-        env:
-          # Point at your deployed API — set this secret in GitHub repo settings
-          API_URL: ${{ secrets.API_URL }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          MIN_SAMPLES: "200"
-        run: |
-          # Run trigger script in "check only" mode (no GH dispatch — we're already in Actions)
-          python - <<'EOF'
-          import os, sys, json, requests
-          from pathlib import Path
-          sys.path.insert(0, ".")
+#       - name: Run drift check
+#         id: drift
+#         env:
+#           # Point at your deployed API — set this secret in GitHub repo settings
+#           API_URL: ${{ secrets.API_URL }}
+#           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#           GH_REPO: ${{ github.repository }}
+#           MIN_SAMPLES: "200"
+#         run: |
+#           # Run trigger script in "check only" mode (no GH dispatch — we're already in Actions)
+#           python - <<'EOF'
+#           import os, sys, json, requests
+#           from pathlib import Path
+#           sys.path.insert(0, ".")
 
-          api_url = os.getenv("API_URL", "http://localhost:8000")
-          resp = requests.get(f"{api_url}/monitoring/drift", timeout=10)
-          report = resp.json()
+#           api_url = os.getenv("API_URL", "http://localhost:8000")
+#           resp = requests.get(f"{api_url}/monitoring/drift", timeout=10)
+#           report = resp.json()
 
-          n = report.get("n", 0)
-          alert = report.get("alert", False)
-          psi = report.get("psi", 0)
-          min_samples = int(os.getenv("MIN_SAMPLES", "200"))
+#           n = report.get("n", 0)
+#           alert = report.get("alert", False)
+#           psi = report.get("psi", 0)
+#           min_samples = int(os.getenv("MIN_SAMPLES", "200"))
 
-          print(f"Drift report: n={n}, PSI={psi:.4f}, alert={alert}")
+#           print(f"Drift report: n={n}, PSI={psi:.4f}, alert={alert}")
 
-          if n < min_samples or not alert:
-              print("No retraining needed.")
-              print("should_retrain=false", file=open(os.environ["GITHUB_OUTPUT"], "a"))
-              sys.exit(0)
+#           if n < min_samples or not alert:
+#               print("No retraining needed.")
+#               print("should_retrain=false", file=open(os.environ["GITHUB_OUTPUT"], "a"))
+#               sys.exit(0)
 
-          # Auto-increment version
-          from train.registry import ModelRegistry
-          models_dir = Path("models")
-          reg = ModelRegistry(models_dir)
-          versions = [v["version"] for v in reg.list_versions()]
-          nums = [int(v.lstrip("v")) for v in versions if v.lstrip("v").isdigit()]
-          new_version = f"v{max(nums, default=1) + 1}"
+#           # Auto-increment version
+#           from train.registry import ModelRegistry
+#           models_dir = Path("models")
+#           reg = ModelRegistry(models_dir)
+#           versions = [v["version"] for v in reg.list_versions()]
+#           nums = [int(v.lstrip("v")) for v in versions if v.lstrip("v").isdigit()]
+#           new_version = f"v{max(nums, default=1) + 1}"
 
-          print(f"Drift detected! Scheduling retrain for {new_version}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"should_retrain=true\n")
-              f.write(f"new_version={new_version}\n")
-          EOF
+#           print(f"Drift detected! Scheduling retrain for {new_version}")
+#           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+#               f.write(f"should_retrain=true\n")
+#               f.write(f"new_version={new_version}\n")
+#           EOF
 
-  # ── 2. Train & Evaluate ──────────────────────────────────────────────────────
-  train-and-evaluate:
-    name: Train & Evaluate New Model
-    runs-on: ubuntu-latest
-    # Run when: manually dispatched, OR drift check says retrain
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'schedule' && needs.drift-check.outputs.should_retrain == 'true')
-    needs: [drift-check]
-    outputs:
-      model_version: ${{ steps.resolve-version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
+#   # ── 2. Train & Evaluate ──────────────────────────────────────────────────────
+#   train-and-evaluate:
+#     name: Train & Evaluate New Model
+#     runs-on: ubuntu-latest
+#     # Run when: manually dispatched, OR drift check says retrain
+#     if: >
+#       github.event_name == 'workflow_dispatch' ||
+#       (github.event_name == 'schedule' && needs.drift-check.outputs.should_retrain == 'true')
+#     needs: [drift-check]
+#     outputs:
+#       model_version: ${{ steps.resolve-version.outputs.version }}
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+#       - name: Install dependencies
+#         run: pip install -r requirements.txt
 
-      - name: Resolve model version
-        id: resolve-version
-        run: |
-          # Use manually provided version, drift-check output, or auto-increment
-          INPUT_VER="${{ github.event.inputs.model_version }}"
-          DRIFT_VER="${{ needs.drift-check.outputs.new_version }}"
+#       - name: Resolve model version
+#         id: resolve-version
+#         run: |
+#           # Use manually provided version, drift-check output, or auto-increment
+#           INPUT_VER="${{ github.event.inputs.model_version }}"
+#           DRIFT_VER="${{ needs.drift-check.outputs.new_version }}"
 
-          if [ -n "$INPUT_VER" ]; then
-            VERSION="$INPUT_VER"
-          elif [ -n "$DRIFT_VER" ]; then
-            VERSION="$DRIFT_VER"
-          else
-            python - <<'EOF'
-          from pathlib import Path
-          import sys
-          sys.path.insert(0, ".")
-          from train.registry import ModelRegistry
-          reg = ModelRegistry(Path("models"))
-          versions = [v["version"] for v in reg.list_versions()]
-          nums = [int(v.lstrip("v")) for v in versions if v.lstrip("v").isdigit()]
-          print(f"v{max(nums, default=1) + 1}")
-          EOF
-            VERSION=$(python -c "
-          from pathlib import Path; import sys; sys.path.insert(0,'.')
-          from train.registry import ModelRegistry
-          reg = ModelRegistry(Path('models'))
-          versions = [v['version'] for v in reg.list_versions()]
-          nums = [int(v.lstrip('v')) for v in versions if v.lstrip('v').isdigit()]
-          print(f'v{max(nums, default=1) + 1}')
-          ")
-          fi
-          echo "Resolved version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+#           if [ -n "$INPUT_VER" ]; then
+#             VERSION="$INPUT_VER"
+#           elif [ -n "$DRIFT_VER" ]; then
+#             VERSION="$DRIFT_VER"
+#           else
+#             python - <<'EOF'
+#           from pathlib import Path
+#           import sys
+#           sys.path.insert(0, ".")
+#           from train.registry import ModelRegistry
+#           reg = ModelRegistry(Path("models"))
+#           versions = [v["version"] for v in reg.list_versions()]
+#           nums = [int(v.lstrip("v")) for v in versions if v.lstrip("v").isdigit()]
+#           print(f"v{max(nums, default=1) + 1}")
+#           EOF
+#             VERSION=$(python -c "
+#           from pathlib import Path; import sys; sys.path.insert(0,'.')
+#           from train.registry import ModelRegistry
+#           reg = ModelRegistry(Path('models'))
+#           versions = [v['version'] for v in reg.list_versions()]
+#           nums = [int(v.lstrip('v')) for v in versions if v.lstrip('v').isdigit()]
+#           print(f'v{max(nums, default=1) + 1}')
+#           ")
+#           fi
+#           echo "Resolved version: $VERSION"
+#           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Train model
-        run: |
-          python -m train.train \
-            --version ${{ steps.resolve-version.outputs.version }} \
-            --epochs 5
+#       - name: Train model
+#         run: |
+#           python -m train.train \
+#             --version ${{ steps.resolve-version.outputs.version }} \
+#             --epochs 5
 
-      - name: Evaluate model (quality gate)
-        run: |
-          python -m train.evaluate \
-            --version ${{ steps.resolve-version.outputs.version }} \
-            --baseline v1 \
-            --min-accuracy 0.95
+#       - name: Evaluate model (quality gate)
+#         run: |
+#           python -m train.evaluate \
+#             --version ${{ steps.resolve-version.outputs.version }} \
+#             --baseline v1 \
+#             --min-accuracy 0.95
 
-      - name: Upload model artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: model-${{ steps.resolve-version.outputs.version }}
-          path: models/${{ steps.resolve-version.outputs.version }}/
+#       - name: Upload model artifacts
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: model-${{ steps.resolve-version.outputs.version }}
+#           path: models/${{ steps.resolve-version.outputs.version }}/
 
-  # ── 3. Build, Push & Deploy (reuses CD logic) ────────────────────────────────
-  build-push-deploy:
-    name: Build, Push & Deploy
-    runs-on: ubuntu-latest
-    needs: [train-and-evaluate]
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
+#   # ── 3. Build, Push & Deploy (reuses CD logic) ────────────────────────────────
+#   build-push-deploy:
+#     name: Build, Push & Deploy
+#     runs-on: ubuntu-latest
+#     needs: [train-and-evaluate]
+#     environment: production
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - name: Download trained model artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: model-${{ needs.train-and-evaluate.outputs.model_version }}
-          path: models/${{ needs.train-and-evaluate.outputs.model_version }}/
+#       - name: Download trained model artifacts
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: model-${{ needs.train-and-evaluate.outputs.model_version }}
+#           path: models/${{ needs.train-and-evaluate.outputs.model_version }}/
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+#       - name: Configure AWS credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+#       - name: Login to Amazon ECR
+#         id: login-ecr
+#         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: retrain-${{ github.run_id }}
-        run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+#       - name: Build, tag, and push image
+#         id: build-image
+#         env:
+#           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+#           IMAGE_TAG: retrain-${{ github.run_id }}
+#         run: |
+#           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+#           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+#                      $ECR_REGISTRY/$ECR_REPOSITORY:latest
+#           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+#           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+#           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Download current ECS task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition $ECS_SERVICE \
-            --query taskDefinition > task-definition.json
+#       - name: Download current ECS task definition
+#         run: |
+#           aws ecs describe-task-definition \
+#             --task-definition $ECS_SERVICE \
+#             --query taskDefinition > task-definition.json
 
-      - name: Render updated task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: task-definition.json
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.build-image.outputs.image }}
+#       - name: Render updated task definition
+#         id: task-def
+#         uses: aws-actions/amazon-ecs-render-task-definition@v1
+#         with:
+#           task-definition: task-definition.json
+#           container-name: ${{ env.CONTAINER_NAME }}
+#           image: ${{ steps.build-image.outputs.image }}
 
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+#       - name: Deploy to ECS
+#         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+#         with:
+#           task-definition: ${{ steps.task-def.outputs.task-definition }}
+#           service: ${{ env.ECS_SERVICE }}
+#           cluster: ${{ env.ECS_CLUSTER }}
+#           wait-for-service-stability: true
 
-      - name: Log retraining event
-        run: |
-          echo "Retrain deploy complete: version=${{ needs.train-and-evaluate.outputs.model_version }} run=${{ github.run_id }}"
+#       - name: Log retraining event
+#         run: |
+#           echo "Retrain deploy complete: version=${{ needs.train-and-evaluate.outputs.model_version }} run=${{ github.run_id }}"
